@@ -1,87 +1,156 @@
-# High-Performance C++ Order Book Matching Engine
-
-A low-latency Limit Order Book implemented in modern C++20, capable of running **100+ million** operations per second.
-This project simulates the core matching logic used by financial exchanges (NASDAQ, CME, Binance) and is engineered for extreme performance, cache locality, and predictable low-latency behavior.
-I built this to explore real-world market microstructure, systems programming, and high-frequency trading.
-
-## Basic Overview
-
-An **order book** is the central structure used by financial exchanges to match buyers and sellers. It keeps track of the current buy orders (bids) and sell orders (asks) for a given asset, usually a stock or crypto.
-- A **buy order** means someone wants to purchase at a certain price or lower.
-- A **sell order** means someone wants to sell at a certain price or higher.
-- Each order has a price and a quantity.
+<div align="center">
   
-Orders are grouped by price into two lists:
-- **Bids**: sorted from highest to lowest price (best offers to buy)
-- **Asks**: sorted from lowest to highest price (best offers to sell)
+# 🚀 High-Performance C++ Limit Order Book Emulator
 
-The best bid and best ask define the **market price**: the point where buyers and sellers are closest to agreement.
+**A nanosecond-latency limit order book matching engine engineered in modern C++20.** <br>
+*Built to simulate the core microstructure of financial exchanges (NASDAQ, CME, Binance).*
 
-When a new order arrives, the engine checks if it can be matched with an existing order on the opposite side:
-- If yes, a **trade** occurs.
-- If not, the new order stays in the book, waiting for a future match.
+[![C++20](https://img.shields.io/badge/C++-20-blue.svg)](https://isocpp.org/)
+[![CMake](https://img.shields.io/badge/CMake-3.20+-green.svg)](https://cmake.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-This process repeats continuously, updating the market in real time.
+</div>
 
-## Architecture
+---
 
-My design emphasizes contiguous storage, predictable memory access patterns, and minimal dynamic allocation. The core classes are:
+## 📖 Overview
 
-### OrderPool
+At the heart of every financial exchange is a **Matching Engine** managing the Limit Order Book (LOB). It continuously pairs buyers and sellers based on strict rules: **Price-Time Priority**. 
 
-A preallocated contiguous block of `Order` objects, providing O(1) allocation and deallocation, eliminating heap fragmenration and improving cache locality.
+This project is a highly optimized, low-latency matching engine capable of sustaining **100+ million operations per second**. It is designed with a strict focus on data-oriented design, contiguous memory layouts, and cache-locality to ensure deterministic execution paths critical for High-Frequency Trading (HFT) environments.
 
-### PriceLevel
+---
 
-Each price level contains a doubly linked queue of orders, which ensures price-time priority without extra node allocations. Removing or inserting at either end is O(1) and cache-efficient.
+## ✨ Advanced Features (Quant Dev Enhancements)
 
-### OrderBookSide
+- **Comprehensive Order Types**: Supports a variety of execution algorithms necessary for modern trading:
+  - `LIMIT`: Rest in the book until filled or canceled.
+  - `MARKET`: Sweep the book aggressively at the best available prices.
+  - `IOC (Immediate-Or-Cancel)`: Fill as much as possible instantly; cancel the remainder.
+  - `FOK (Fill-Or-Kill)`: Execute the *entire* quantity immediately, or do nothing.
+  - `POST_ONLY`: Ensure the order is added as a liquidity maker; reject if it crosses the spread.
+- **Exchange Rules Validation**: Enforces exact **Tick Size** (price increments) and **Lot Size** (quantity multiples).
+- **Zero-Allocation Hot Path**: Utilizes a custom `OrderPool` memory arena to guarantee O(1) allocation/deallocation without heap fragmentation.
+- **Data-Oriented Structures**: Built using `boost::container::flat_map` and intrusive doubly-linked lists for maximum L1/L2 cache hit rates.
+- **Market Data Feeds**: Includes a `FeedHandler` to playback historical order flows from CSV/Binary files for backtesting.
 
-A `boost::container::flat_map`that stores price levels in sorted contiguous memory. It provides logarithmic lookups with significantly better locality compared to a regular `std::map`, which uses red-black trees.
+---
 
-### OrderLookup
+## 🏗️ Architecture Design
 
-An `unordered_map` mapping OrderId -> (Side, Order*). This allows O(1) cancels and modifications.
+The engine is engineered around four core optimized structures to minimize pointer chasing and maximize memory throughput.
 
-### MatchingEngine
+```mermaid
+graph TD
+    classDef core fill:#0b5394,stroke:#333,stroke-width:2px,color:#fff;
+    classDef struct fill:#38761d,stroke:#333,stroke-width:2px,color:#fff;
+    
+    ME[\Matching Engine/]:::core --> BIDS[Bids OrderBookSide]:::struct
+    ME --> ASKS[Asks OrderBookSide]:::struct
+    ME --> OP[Order Pool Arena]:::struct
+    ME --> OL[Order Lookup Hash Map]:::struct
+    
+    BIDS --> PL1(PriceLevel: 100.05)
+    BIDS --> PL2(PriceLevel: 100.00)
+    
+    ASKS --> PL3(PriceLevel: 100.10)
+    ASKS --> PL4(PriceLevel: 100.15)
+    
+    PL1 --> O1((Order 1)):::core
+    O1 --> O2((Order 2)):::core
+```
 
-The coordinator. Handles.
-- Matching new orders
-- Maintaining book structure
-- Tracking best prices
-- Canceling, modifying, and allocating orders
+### Component Breakdown
+1. **`OrderPool`**: A pre-allocated contiguous memory block for `Order` objects. Eliminates OS-level `malloc`/`free` during active trading.
+2. **`OrderBookSide`**: A flat structure (`boost::container::flat_map`) managing price levels in contiguous memory for fast binary searching.
+3. **`PriceLevel`**: An intrusive, doubly-linked queue prioritizing orders. Allows O(1) insertions, deletions, and executions without allocating list nodes.
+4. **`OrderLookup`**: An `std::unordered_map` mapping `OrderId` to raw memory pointers for O(1) order cancellations and modifications.
 
-It produces a predictable and efficient hot path, allowing operations to complete in only a few nanoseconds.
+---
 
-## Performance benchmarks
+## 🔄 Order Matching Flow
 
-All benchmarks were compiled with `-O3` and measured using Google Benchmark on a 12-core 2.6 GHz machine.
+When a new order arrives, the engine immediately attempts to cross it with resting liquidity before adding it to the book.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Engine
+    participant Asks (Opposite Side)
+    participant Bids (Own Side)
+    participant Pool
+
+    User->>Engine: add_order(Buy 100 @ Limit 50)
+    Engine->>Pool: allocate()
+    Engine->>Asks: get_best_price()
+    
+    alt Price Crosses (Resting Ask <= 50)
+        Engine->>Asks: Crosses! Execute Trade(s)
+        Asks-->>Engine: Trade(Maker1, Taker, Price, Qty)
+        
+        alt Order Fully Filled
+           Engine->>Pool: deallocate()
+           Engine-->>User: Return vector[Trades]
+        end
+    end
+    
+    alt Order Partially Filled or Unfilled
+        Engine->>Bids: insert_order(Remaining Qty)
+        Engine-->>User: Return vector[Trades]
+    end
+```
+
+---
+
+## ⚡ Performance Benchmarks
+
+*Hardware: Measured using Google Benchmark on a 12-core 2.6 GHz machine. Compiled with GCC `-O3`.*
+
+The engine's hot paths utilize GCC extensions (`[[likely]]`/`[[unlikely]]`) for optimal branch prediction.
+
+| Operation Workload | Avg Time (ns) | Ops / Second | L1 Cache Pattern |
+|--------------------|--------------|--------------|------------------|
+| **Core Matching** | `~8 - 10 ns` | `100M+ ops/s`| Intrusive Queues |
+| **Best-Price Query** | `~2 ns` | `500M+ ops/s` | `flat_map` (Hit) |
+| **Cancel/Modify** | `~25 - 30 ns` | `30M+ ops/s` | Hash Map Lookup |
 
 ![Benchmarks](/images/benchmark.png)
 
-### Observations
+> **Key Takeaway**: Best-price queries are effectively immediate (L1 cache hits). Core matching operations (allocating, traversing lists, generating trades) are completed in under 10 nanoseconds, proving the efficiency of the custom memory pool and intrusive data structures.
 
-- Core matching operations run in 8–10 nanoseconds, comparable to specialized low-latency engines.
-- Best-price queries are ~2 nanoseconds, typically L1-cache hits.
-- Modify/cancel-heavy workloads are slower (as expected) due to necessary shifting in flat_map.
-- The engine sustains tens of millions of operations per second on common hardware.
+---
 
-## Motivation
+## 🛠️ Building and Running
 
-Modern exchanges must process millions of events per second with minimal latency.
-This project was built to study:
-- Market microstructure
-- Data structure design for low latency
-- CPU caching behavior
-- Memory access patterns
-- High-performance C++ programming
+This project uses `CMake` and requires a modern compiler supporting **C++20** (GCC 10+, Clang 10+, or MSVC 19.28+).
 
-The goal was to create a realistic, efficient, and extensible matching engine suitable for experimentation and learning.
-
-## Running benchmarks
-
+### 1. Configure and Build
 ```bash
+# Clone the repository
+git clone https://github.com/yourusername/order_book_simulator.git
+cd order_book_simulator
+
+# Generate build files
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+# Compile the engine
 cmake --build build --config Release
+```
+
+### 2. Run Tests & Benchmarks
+```bash
+# Run GoogleTest suite (Verifies FOK, IOC, Market orders, etc.)
+./build/tests
+
+# Run Google Benchmark
 ./build/order_book_bench
 ```
+
+---
+
+## 🎯 Motivation & Learning Outcomes
+
+This emulator was developed to deeply understand the latency-critical components of High-Frequency Trading systems. Key areas explored include:
+- **Market Microstructure**: Implementing exchange logic exactly as it functions in the real world (Tick rules, FOK/IOC/Post-Only edge cases).
+- **Mechanical Sympathy**: Designing C++ classes around how modern CPU caches (L1/L2/L3) operate, rather than abstract object-oriented theory.
+- **Systems Engineering**: Avoiding standard library pitfalls (like `std::map` node allocations) in favor of flat, contiguous structures (`boost::flat_map`).
